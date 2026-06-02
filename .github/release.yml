@@ -1,0 +1,27 @@
+# Configuration des notes de version auto-générées par GitHub.
+# Les catégories s'appuient sur les LABELS des pull requests fusionnées depuis le dernier tag.
+# Doc : https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+    authors:
+      - dependabot
+      - github-actions
+  categories:
+    - title: ✨ Fonctionnalités
+      labels: [feature, enhancement]
+    - title: 🐛 Corrections
+      labels: [bug, fix]
+    - title: 🏗️ Architecture & refactor
+      labels: [refactor, architecture]
+    - title: 🗃️ Base de données & migrations
+      labels: [database, migration]
+    - title: 👷 CI/CD & build
+      labels: [ci, cd, build, docker]
+    - title: 📝 Documentation
+      labels: [documentation, docs]
+    - title: ⬆️ Dépendances
+      labels: [dependencies]
+    - title: 🔀 Autres changements
+      labels: ["*"]

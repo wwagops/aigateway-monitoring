@@ -1,0 +1,64 @@
+# Exemple de configuration aigw-monitor.
+# Deux blocs : `monitor:` (runtime, surchargeable par env AIGW_*) et `defaults:` + `organizations:` (cibles).
+
+monitor:
+  # Base de données (driver async). Surcharge : AIGW_DATABASE_URL.
+  # Si omis -> SQLite local (sqlite+aiosqlite:///aigw.db), schéma créé automatiquement.
+  # Pour la prod, décommenter une URL PostgreSQL et appliquer `alembic upgrade head` :
+  # database_url: postgresql+asyncpg://aigw:aigw@localhost:5432/aigw
+  # « Écart » entre deux passages de sonde : secondes (int) OU expression cron (str). AIGW_SCHEDULE
+  schedule: 60
+  # schedule: "*/5 * * * *"   # équivalent cron toutes les 5 minutes
+  http_timeout_seconds: 30
+  max_concurrency: 16
+  api_host: 0.0.0.0
+  api_port: 8080
+  metrics_path: /metrics
+  expose_base_url: false       # masque les base_url internes dans l'API / metrics
+  log_level: INFO
+
+# Valeurs héritées par toutes les cibles.
+# Précédence (du moins au plus spécifique) :
+#   defaults < org < model_defaults[<nom>] < (org, modèle)
+defaults:
+  max_tokens: 16
+  capabilities:
+    tool_calling: false
+    reasoning: false
+
+# Capacités PAR NOM DE MODÈLE, appliquées à ce modèle dans TOUTES les organisations.
+# Pratique pour déclarer une bonne fois les capacités intrinsèques d'un modèle partagé,
+# sans les répéter dans chaque organisation.
+model_defaults:
+  gpt-oss-120b:
+    capabilities:
+      tool_calling: true
+      reasoning: true
+  deepseek-r1:
+    capabilities:
+      tool_calling: true
+      reasoning:
+        enabled: true
+        extra_body:
+          chat_template_kwargs:
+            enable_thinking: true
+
+organizations:
+  - name: acme
+    base_url: https://gateway.acme.internal/v1
+    api_key_env: ACME_API_KEY          # clé résolue depuis l'environnement (jamais en clair ici)
+    capabilities:
+      tool_calling: true               # défaut org : tous les modèles testent le tool calling
+    models:
+      - name: qwen2.5-72b-instruct     # hérite tool_calling=true (niveau org)
+      - name: deepseek-r1              # capacités venues de model_defaults (tool + reasoning)
+      - name: gpt-oss-120b             # capacités venues de model_defaults (tool + reasoning)
+        capabilities:
+          reasoning: false             # override (org, modèle) : on désactive ici le reasoning
+
+  - name: research
+    base_url: https://llm.research.internal/v1
+    api_key_env: RESEARCH_API_KEY
+    models:
+      - name: gpt-oss-120b             # même modèle, autre org : hérite de model_defaults
+      - name: mistral-small-3.2-24b    # absent du registre + aucune capa -> liveness seulement

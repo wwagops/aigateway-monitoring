@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aigw
+      POSTGRES_PASSWORD: aigw
+      POSTGRES_DB: aigw
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aigw"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Applique les migrations puis se termine.
+  migrate:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIGW_DATABASE_URL: postgresql+asyncpg://aigw:aigw@postgres:5432/aigw
+    entrypoint: ["alembic", "upgrade", "head"]
+
+  monitor:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      AIGW_DATABASE_URL: postgresql+asyncpg://aigw:aigw@postgres:5432/aigw
+      AIGW_CONFIG_PATH: /app/config.yaml
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.env:/app/.env:ro
+
+volumes:
+  pgdata:
