@@ -170,3 +170,53 @@ def test_model_defaults_applies_across_orgs_and_precedence(tmp_path):
     assert other.enabled_capabilities == []
     assert selected_probes(other) == ["liveness"]
     assert other.max_tokens == 8
+
+
+CONFIG_LIVENESS = """
+defaults:
+  liveness: models            # défaut global : sonde légère /v1/models
+
+model_defaults:
+  reg:
+    liveness: chat            # le registre force le chat pour ce modèle
+
+organizations:
+  - name: a
+    base_url: https://a/v1
+    models:
+      - name: plain           # hérite du défaut global -> models
+      - name: reg             # le registre l'emporte sur le défaut -> chat
+  - name: b
+    base_url: https://b/v1
+    liveness: chat            # défaut d'org -> chat
+    models:
+      - name: plain           # hérite de l'org -> chat
+      - name: forced
+        liveness: models      # (org,modèle) l'emporte sur l'org -> models
+"""
+
+
+def test_liveness_method_precedence(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG_LIVENESS, encoding="utf-8")
+    cfg = load_config(path)
+    targets = {(t.organization, t.model): t for t in cfg.targets}
+
+    assert targets[("a", "plain")].liveness == "models"   # défaut global
+    assert targets[("a", "reg")].liveness == "chat"       # registre > défaut global
+    assert targets[("b", "plain")].liveness == "chat"     # défaut d'org > défaut global
+    assert targets[("b", "forced")].liveness == "models"  # (org,modèle) > org
+
+
+def test_liveness_method_defaults_to_chat(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "organizations:\n"
+        "  - name: a\n"
+        "    base_url: https://a/v1\n"
+        "    models:\n"
+        "      - name: m\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    assert cfg.targets[0].liveness == "chat"

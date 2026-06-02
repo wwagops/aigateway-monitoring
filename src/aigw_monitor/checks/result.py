@@ -30,6 +30,8 @@ class ProbeResult:
     http_status: int | None = None
     error: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    # Essentiel de la requête envoyée (prompt, outil, déclencheurs) — log d'entrée.
+    request: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def skipped(cls, kind: type[LivenessStatus] | type[CapabilityStatus]) -> ProbeResult:

@@ -19,6 +19,20 @@ _MAX_ERROR_LEN = 300
 TOOL_MAX_TOKENS = 128
 REASONING_MAX_TOKENS = 256
 
+# Prompts des sondes (partagés avec probe_request pour éviter toute dérive).
+LIVENESS_PROMPT = "ping"
+TOOL_PROMPT = "What is the current weather in Paris? Use the available tool."
+REASONING_PROMPT = "Think step by step, then answer: what is 17 * 23?"
+
+# Nom de la sonde liveness selon la méthode : la up/down est ainsi nommée comme une capacité
+# (ex. « chat_completion OK »). Clé = méthode (settings/loader), valeur = nom affiché/persisté.
+LIVENESS_PROBE_NAMES: dict[str, str] = {"chat": "chat_completion", "models": "list_models"}
+
+
+def liveness_name(method: str) -> str:
+    """Nom de la sonde liveness pour une méthode (``chat_completion`` par défaut)."""
+    return LIVENESS_PROBE_NAMES.get(method, LIVENESS_PROBE_NAMES["chat"])
+
 # Outil factice utilisé pour tester le tool calling.
 WEATHER_TOOL: dict[str, Any] = {
     "type": "function",
@@ -35,6 +49,26 @@ WEATHER_TOOL: dict[str, Any] = {
         },
     },
 }
+
+
+def probe_request(probe: str, target: ResolvedTarget) -> dict[str, Any]:
+    """Essentiel de la requête d'une sonde (log d'entrée) : prompt, outil, déclencheurs."""
+    if probe == "liveness":
+        if target.liveness == "models":
+            return {"endpoint": "GET /v1/models", "model": target.model}
+        return {"prompt": LIVENESS_PROMPT}
+    if probe == "tool_calling":
+        spec = target.capabilities.get("tool_calling")
+        return {
+            "prompt": TOOL_PROMPT,
+            "tools": [WEATHER_TOOL["function"]["name"]],
+            "tool_choice": "auto",
+            "extra_body": dict(spec.extra_body) if spec else {},
+        }
+    if probe == "reasoning":
+        spec = target.capabilities.get("reasoning")
+        return {"prompt": REASONING_PROMPT, "extra_body": dict(spec.extra_body) if spec else {}}
+    return {}
 
 
 def _sanitize(message: str, base_url: str) -> str:
@@ -61,9 +95,16 @@ def _first_message(data: dict[str, Any]) -> dict[str, Any]:
 
 
 async def check_liveness(client: OpenAICompatClient, target: ResolvedTarget) -> ProbeResult:
+    """Up/down : dispatch selon la méthode configurée (``chat`` par défaut, ou ``models``)."""
+    if target.liveness == "models":
+        return await _liveness_via_models(client, target)
+    return await _liveness_via_chat(client, target)
+
+
+async def _liveness_via_chat(client: OpenAICompatClient, target: ResolvedTarget) -> ProbeResult:
     payload = {
         "model": target.model,
-        "messages": [{"role": "user", "content": "ping"}],
+        "messages": [{"role": "user", "content": LIVENESS_PROMPT}],
         "max_tokens": 1,
         "temperature": 0,
     }
@@ -98,15 +139,46 @@ async def check_liveness(client: OpenAICompatClient, target: ResolvedTarget) -> 
     )
 
 
+async def _liveness_via_models(
+    client: OpenAICompatClient, target: ResolvedTarget
+) -> ProbeResult:
+    """Sonde légère : GET /v1/models, UP si le modèle figure dans la liste renvoyée."""
+    try:
+        response, latency = await client.list_models()
+    except httpx.TimeoutException as exc:
+        return ProbeResult(
+            LivenessStatus.ERROR, error=_sanitize(f"timeout: {exc}", client.base_url)
+        )
+    except httpx.HTTPError as exc:
+        return ProbeResult(
+            LivenessStatus.ERROR, error=_sanitize(f"http error: {exc}", client.base_url)
+        )
+
+    if response.status_code != 200:
+        return ProbeResult(
+            LivenessStatus.DOWN,
+            latency_ms=latency,
+            http_status=response.status_code,
+            error=_short_body(response, client.base_url),
+        )
+    data = response.json() if _is_json(response) else {}
+    ids = [m.get("id") for m in (data.get("data") or []) if isinstance(m, dict)]
+    if target.model in ids:
+        return ProbeResult(LivenessStatus.UP, latency_ms=latency, http_status=200)
+    return ProbeResult(
+        LivenessStatus.DOWN,
+        latency_ms=latency,
+        http_status=200,
+        error="modèle absent de /v1/models",
+    )
+
+
 async def check_tool_calling(client: OpenAICompatClient, target: ResolvedTarget) -> ProbeResult:
     spec = target.capabilities.get("tool_calling")
     payload: dict[str, Any] = {
         "model": target.model,
         "messages": [
-            {
-                "role": "user",
-                "content": "What is the current weather in Paris? Use the available tool.",
-            }
+            {"role": "user", "content": TOOL_PROMPT}
         ],
         "tools": [WEATHER_TOOL],
         "tool_choice": "auto",
@@ -160,9 +232,7 @@ async def check_reasoning(client: OpenAICompatClient, target: ResolvedTarget) ->
     spec = target.capabilities.get("reasoning")
     payload: dict[str, Any] = {
         "model": target.model,
-        "messages": [
-            {"role": "user", "content": "Think step by step, then answer: what is 17 * 23?"}
-        ],
+        "messages": [{"role": "user", "content": REASONING_PROMPT}],
         "max_tokens": max(target.max_tokens, REASONING_MAX_TOKENS),
         "temperature": 0,
     }

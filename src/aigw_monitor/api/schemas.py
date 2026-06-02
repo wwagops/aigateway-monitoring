@@ -24,16 +24,28 @@ class TargetOut(BaseModel):
     probes: list[str]
 
 
+class CapabilityOut(BaseModel):
+    """Capacité : statut, latence, logs essentiels (HTTP + erreur) et requête envoyée."""
+
+    status: str
+    latency_ms: float | None = None
+    http_status: int | None = None
+    error: str | None = None
+    request: dict = {}  # log d'entrée : prompt, outil, déclencheurs (extra_body)
+
+
 class ModelStatusOut(BaseModel):
     organization: str
     model: str
     base_url: str | None = None
     run_id: int
     checked_at: datetime
+    # Sonde up/down nommée (comme une capacité) : « chat_completion » / « list_models ».
+    liveness_probe: str = "chat_completion"
     liveness_status: str
-    latency_ms: float | None = None
-    # Map générique {nom_capacité: statut} (ex. {"tool_calling": "AVAILABLE", ...}).
-    capabilities: dict[str, str] = {}
+    latency_ms: float | None = None  # latence de la sonde liveness
+    # Map par capacité : {nom: {status, latency_ms}} (ex. {"tool_calling": {...}, ...}).
+    capabilities: dict[str, CapabilityOut] = {}
     http_status: int | None = None
     error: str | None = None
     mismatches: list[str] = []
@@ -42,7 +54,13 @@ class ModelStatusOut(BaseModel):
     def from_orm_check(cls, mc: ModelCheck, expose_base_url: bool) -> Self:
         details = mc.details or {}
         capabilities = {
-            name: entry.get("status", "")
+            name: CapabilityOut(
+                status=entry.get("status", ""),
+                latency_ms=entry.get("latency_ms"),
+                http_status=entry.get("http_status"),
+                error=entry.get("error"),
+                request=entry.get("request") or {},
+            )
             for name, entry in (mc.capabilities or {}).items()
         }
         return cls(
@@ -51,6 +69,7 @@ class ModelStatusOut(BaseModel):
             base_url=mc.base_url if expose_base_url else None,
             run_id=mc.run_id,
             checked_at=mc.checked_at,
+            liveness_probe=details.get("liveness_probe") or "chat_completion",
             liveness_status=mc.liveness_status.value,
             latency_ms=mc.latency_ms,
             capabilities=capabilities,

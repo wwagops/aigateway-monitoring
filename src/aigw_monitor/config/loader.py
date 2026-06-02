@@ -23,6 +23,7 @@ class ResolvedTarget:
     model: str
     api_key: str | None
     max_tokens: int
+    liveness: str = "chat"  # méthode de sonde liveness : "chat" (défaut) | "models"
     capabilities: dict[str, CapabilitySpec] = field(default_factory=dict)
 
     @property
@@ -95,6 +96,7 @@ def load_config(path: str | Path) -> LoadedConfig:
             registry = root.model_defaults.get(model.name)
             registry_caps = registry.capabilities if registry is not None else {}
             registry_max_tokens = registry.max_tokens if registry is not None else None
+            registry_liveness = registry.liveness if registry is not None else None
 
             # Précédence (du moins au plus spécifique) :
             # défauts globaux < org < registre par nom de modèle < (org, modèle).
@@ -110,6 +112,10 @@ def load_config(path: str | Path) -> LoadedConfig:
                 org.max_tokens,
                 root.defaults.max_tokens,
             )
+            # Même précédence pour la méthode liveness (défauts.liveness vaut "chat").
+            liveness = (
+                model.liveness or registry_liveness or org.liveness or root.defaults.liveness
+            )
             targets.append(
                 ResolvedTarget(
                     organization=org.name,
@@ -117,6 +123,7 @@ def load_config(path: str | Path) -> LoadedConfig:
                     model=model.name,
                     api_key=api_key,
                     max_tokens=max_tokens,
+                    liveness=liveness,
                     capabilities=caps,
                 )
             )

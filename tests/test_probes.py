@@ -6,22 +6,29 @@ import httpx
 import respx
 
 from aigw_monitor.checks.client import OpenAICompatClient
-from aigw_monitor.checks.probes import check_liveness, check_reasoning, check_tool_calling
+from aigw_monitor.checks.probes import (
+    check_liveness,
+    check_reasoning,
+    check_tool_calling,
+    liveness_name,
+)
 from aigw_monitor.checks.result import CapabilityStatus, LivenessStatus
 from aigw_monitor.config.loader import ResolvedTarget
 from aigw_monitor.config.schema import CapabilitySpec
 
 BASE = "https://gw.test/v1"
 URL = f"{BASE}/chat/completions"
+MODELS_URL = f"{BASE}/models"
 
 
-def _target() -> ResolvedTarget:
+def _target(liveness: str = "chat") -> ResolvedTarget:
     return ResolvedTarget(
         organization="org",
         base_url=BASE,
         model="m",
         api_key=None,
         max_tokens=16,
+        liveness=liveness,
         capabilities={
             "tool_calling": CapabilitySpec(enabled=True),
             "reasoning": CapabilitySpec(enabled=True),
@@ -55,6 +62,42 @@ async def test_liveness_error_on_network():
     async with OpenAICompatClient(BASE, None, 5) as client:
         res = await check_liveness(client, _target())
     assert res.status == LivenessStatus.ERROR
+
+
+def test_liveness_name_by_method():
+    # La sonde up/down est nommée comme une capacité, selon la méthode.
+    assert liveness_name("chat") == "chat_completion"
+    assert liveness_name("models") == "list_models"
+    assert liveness_name("inconnu") == "chat_completion"  # repli sur le défaut
+
+
+@respx.mock
+async def test_liveness_models_up_when_listed():
+    respx.get(MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "other"}, {"id": "m"}]})
+    )
+    async with OpenAICompatClient(BASE, None, 5) as client:
+        res = await check_liveness(client, _target(liveness="models"))
+    assert res.status == LivenessStatus.UP
+    assert res.latency_ms is not None
+
+
+@respx.mock
+async def test_liveness_models_down_when_absent():
+    respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json={"data": [{"id": "other"}]}))
+    async with OpenAICompatClient(BASE, None, 5) as client:
+        res = await check_liveness(client, _target(liveness="models"))
+    assert res.status == LivenessStatus.DOWN
+    assert res.http_status == 200
+
+
+@respx.mock
+async def test_liveness_models_down_on_5xx():
+    respx.get(MODELS_URL).mock(return_value=httpx.Response(502, text="bad gateway"))
+    async with OpenAICompatClient(BASE, None, 5) as client:
+        res = await check_liveness(client, _target(liveness="models"))
+    assert res.status == LivenessStatus.DOWN
+    assert res.http_status == 502
 
 
 @respx.mock

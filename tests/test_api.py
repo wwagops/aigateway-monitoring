@@ -86,9 +86,13 @@ async def test_end_to_end(session_factory, settings):
         status = (await client.get("/api/status")).json()
         status_by_model = {s["model"]: s for s in status}
         assert status_by_model["qwen"]["liveness_status"] == "UP"
-        assert status_by_model["qwen"]["capabilities"]["tool_calling"] == "AVAILABLE"
+        # La sonde up/down est nommée comme une capacité (méthode chat par défaut).
+        assert status_by_model["qwen"]["liveness_probe"] == "chat_completion"
+        qwen_tool = status_by_model["qwen"]["capabilities"]["tool_calling"]
+        assert qwen_tool["status"] == "AVAILABLE"
+        assert qwen_tool["latency_ms"] is not None  # latence par test exposée
         # gpt-oss : capacité non déclarée -> sonde non exécutée
-        assert status_by_model["gpt-oss"]["capabilities"]["tool_calling"] == "SKIPPED"
+        assert status_by_model["gpt-oss"]["capabilities"]["tool_calling"]["status"] == "SKIPPED"
 
         runs = (await client.get("/api/runs")).json()
         assert len(runs) == 1
@@ -121,7 +125,8 @@ async def test_metrics_endpoint_returns_200_without_redirect(session_factory, se
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/metrics")
     assert resp.status_code == 200
-    assert "aigw_model_up" in resp.text
+    # La gauge up/down porte un label probe nommant la sonde (comme capability).
+    assert 'aigw_model_up{model="qwen",org="acme",probe="chat_completion"} 1.0' in resp.text
     assert (
         'aigw_model_capability_available{capability="tool_calling",model="qwen",org="acme"} 1.0'
         in resp.text

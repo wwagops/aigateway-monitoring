@@ -40,7 +40,7 @@ Avant de conclure une tâche : `ruff check . && mypy src && pytest` doivent tous
 | `checks/capabilities.py` | **Point d'extension** : registre `CAPABILITY_PROBES` (nom→sonde) + `CAPABILITY_NAMES` + `selected_probes(target)`. Ajouter une capacité = 1 sonde + 1 entrée ici. |
 | `checks/runner.py` | `run_cycle()` : concurrence bornée (`Semaphore`), **itère le registre** → `ModelCheckResult.capabilities: dict[str, ProbeResult]`, détection de dérive, persistance + métriques. |
 | `db/base.py`,`db/models.py`,`db/repository.py` | Moteur async, init schéma SQLite (`create_all_if_sqlite`), ORM (`CheckRun`,`ModelCheck` — capacités en **colonne JSONB générique**), requêtes. |
-| `metrics/prometheus.py` | `PrometheusMetrics` (registre dédié) ; gauge **générique** `aigw_model_capability_available` (label `capability`). |
+| `metrics/prometheus.py` | `PrometheusMetrics` (registre dédié) ; gauge **générique** `aigw_model_capability_available` (label `capability`) ; `aigw_model_up`/`aigw_model_check_latency_seconds` portent un label `probe` (nom de la sonde up/down). |
 | `api/` | FastAPI lecture seule (`routes.py`, `schemas.py`, `deps.py`, `app.py`). |
 | `scheduler.py`,`service.py`,`cli.py` | Trigger APScheduler, daemon (uvicorn+scheduler), CLI Typer. |
 
@@ -56,6 +56,9 @@ Avant de conclure une tâche : `ruff check . && mypy src && pytest` doivent tous
   Les commandes humaines (`check-once`, `validate-config`) configurent les logs à **WARNING**
   (donc pas de bruit httpx/INFO) ; `check-once --verbose` repasse à INFO. Le daemon (`run`)
   garde `settings.log_level`. Ne pas logger sur stdout ni baisser ce niveau par défaut.
+- **Tableau CLI** : bordé (filets pleins) + couleurs via **rich** si `sys.stdout.isatty()`
+  (`_print_table_rich`), sinon aligné par espaces sans bordures (`_print_table_plain`,
+  pipe-friendly). Garder cette bascule TTY.
 - **Portabilité DB (tests sqlite)** : utiliser `JSON_VARIANT` (= `JSON().with_variant(JSONB(),
   "postgresql")`) et `SAEnum` (type nommé `_liveness_enum`). Les statuts de capacité sont dans
   la **colonne JSONB `capabilities`** (pas de colonne/enum par capacité). Pas de SQL PG-only
@@ -77,15 +80,42 @@ Avant de conclure une tâche : `ruff check . && mypy src && pytest` doivent tous
   à ce modèle dans **toutes** les organisations et **prime sur le défaut d'org** ; seul un
   override explicite `(org, modèle)` le surclasse. Même précédence pour `max_tokens`
   (helper `_first_not_none`). Ne pas réordonner sans mettre à jour `test_config.py` et le README.
+- **Méthode liveness** (`ResolvedTarget.liveness`, `Literal["chat","models"]`) : résolue avec la
+  **même précédence** (`defaults.liveness` vaut `chat`, donc toujours défini). `check_liveness`
+  dispatche vers `_liveness_via_chat` (chat completion réel, défaut) ou `_liveness_via_models`
+  (`client.list_models()` → `GET /v1/models`, `UP` si le modèle figure dans `data[].id`). La
+  méthode est reflétée dans `probe_request("liveness", …)` (`{endpoint: "GET /v1/models", …}`
+  pour `models`).
+- **Nom de la sonde up/down** : la liveness est **nommée comme une capacité** selon sa méthode
+  via `probes.liveness_name(method)` (`LIVENESS_PROBE_NAMES` : `chat`→`chat_completion`,
+  `models`→`list_models`). Porté par `ModelCheckResult.liveness_name`, listé dans
+  `validate-config` (colonne SONDES, à côté de `tool_calling`/`reasoning`) et la section
+  « Détails par sonde » de la CLI, **persisté** dans `details.liveness_probe`, exposé par l'API
+  (`ModelStatusOut.liveness_probe`) et mis en **label `probe`** sur `aigw_model_up` /
+  `aigw_model_check_latency_seconds`. Ajouter une méthode liveness = 1 entrée dans
+  `LIVENESS_PROBE_NAMES` + le dispatch dans `check_liveness`/`probe_request`.
 - **Dérive** : capacité déclarée `enabled=true` mais sonde `UNAVAILABLE` ⇒ ajoutée à
   `mismatches` (et gauge `aigw_model_capability_mismatch`). Voir `runner._detect_mismatches`.
 
 ## Sémantique des statuts
 
-- Liveness : `UP` (200 + `choices`) · `DOWN` (HTTP non-200 / JSON invalide) · `ERROR`
+- Liveness : `UP` (chat : 200 + `choices` ; models : modèle listé dans `/v1/models`) ·
+  `DOWN` (HTTP non-200 / JSON invalide / modèle absent de la liste) · `ERROR`
   (réseau/timeout) · `SKIPPED`.
 - Capacité : `AVAILABLE` · `UNAVAILABLE` · `ERROR` · `SKIPPED`. Les gauges Prometheus de
   capacité ne sont émises que pour `AVAILABLE`/`UNAVAILABLE`.
+
+## Logs essentiels par sonde (entrée + sortie)
+
+Chaque `ProbeResult` porte la **sortie** (`status`, `latency_ms`, `http_status`, `error`) **et**
+l'**entrée** (`request` : prompt/outil/`extra_body`, reconstruite par `probes.probe_request`
+depuis des **constantes partagées** — `LIVENESS_PROMPT`/`TOOL_PROMPT`/`REASONING_PROMPT` — pour
+éviter toute dérive, et attachée par le runner). Persistés dans le JSONB `capabilities`
+(+ `details.liveness`), affichés dans la section « Détails par sonde » de la CLI (entrée
+`request` pour **toutes** les sondes exécutées, sortie HTTP/erreur pour les non-OK) et exposés
+par `CapabilityOut` de l'API (`latency_ms`, `http_status`, `error`, `request`). Erreurs **assainies**.
+Dans la CLI, la sonde up/down y apparaît sous son **nom** (`liveness_name`, ex. `chat_completion`),
+au même titre que les capacités.
 
 ## Détection des capacités (champs validés sur un vrai endpoint)
 

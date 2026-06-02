@@ -21,6 +21,7 @@ def _probe_to_dict(probe: Any) -> dict[str, Any]:
         "latency_ms": probe.latency_ms,
         "http_status": probe.http_status,
         "error": probe.error,
+        "request": probe.request,
         "details": probe.details,
     }
 
@@ -59,7 +60,11 @@ async def save_run(
                 },
                 http_status=r.liveness.http_status,
                 error=r.liveness.error,
-                details={"mismatches": r.mismatches, "liveness": _probe_to_dict(r.liveness)},
+                details={
+                    "mismatches": r.mismatches,
+                    "liveness_probe": r.liveness_name,
+                    "liveness": _probe_to_dict(r.liveness),
+                },
             )
         )
     await session.commit()

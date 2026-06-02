@@ -20,8 +20,10 @@ monitor:
 # Valeurs héritées par toutes les cibles.
 # Précédence (du moins au plus spécifique) :
 #   defaults < org < model_defaults[<nom>] < (org, modèle)
+# La clé `liveness` suit la même précédence et peut être posée à chaque niveau.
 defaults:
   max_tokens: 16
+  liveness: chat             # méthode up/down : `chat` (chat completion réel, défaut) | `models` (GET /v1/models)
   capabilities:
     tool_calling: false
     reasoning: false
@@ -63,3 +65,4 @@ organizations:
     models:
       - name: gpt-oss-120b             # même modèle, autre org : hérite de model_defaults
       - name: mistral-small-3.2-24b    # absent du registre + aucune capa -> liveness seulement
+        liveness: models               # up/down via GET /v1/models au lieu d'un chat completion

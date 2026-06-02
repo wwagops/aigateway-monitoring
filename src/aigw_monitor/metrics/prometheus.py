@@ -26,7 +26,10 @@ class PrometheusMetrics:
         labels = ["org", "model"]
 
         self.up = Gauge(
-            "aigw_model_up", "Modèle joignable (1) ou non (0)", labels, registry=self.registry
+            "aigw_model_up",
+            "Modèle joignable (1) ou non (0) ; label probe = sonde up/down (chat_completion/...)",
+            ["org", "model", "probe"],
+            registry=self.registry,
         )
         self.capability = Gauge(
             "aigw_model_capability_available",
@@ -36,8 +39,8 @@ class PrometheusMetrics:
         )
         self.latency = Gauge(
             "aigw_model_check_latency_seconds",
-            "Latence de la sonde liveness (s)",
-            labels,
+            "Latence de la sonde up/down (s) (label probe)",
+            ["org", "model", "probe"],
             registry=self.registry,
         )
         self.errors = Counter(
@@ -65,7 +68,7 @@ class PrometheusMetrics:
 
     def record(self, summary: RunSummary) -> None:
         for r in summary.results:
-            self.up.labels(r.organization, r.model).set(1 if r.is_up else 0)
+            self.up.labels(r.organization, r.model, r.liveness_name).set(1 if r.is_up else 0)
 
             for name, result in r.capabilities.items():
                 if result.status in _RAN:
@@ -77,7 +80,9 @@ class PrometheusMetrics:
                 )
 
             if r.liveness.latency_ms is not None:
-                self.latency.labels(r.organization, r.model).set(r.liveness.latency_ms / 1000.0)
+                self.latency.labels(r.organization, r.model, r.liveness_name).set(
+                    r.liveness.latency_ms / 1000.0
+                )
             if r.has_error:
                 self.errors.labels(r.organization, r.model).inc()
 

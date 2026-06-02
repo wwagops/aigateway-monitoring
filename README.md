@@ -138,24 +138,19 @@ aigw-monitor check-once -c config.yaml --verbose    # logs détaillés (INFO) su
 aigw-monitor run -c config.yaml
 ```
 
-Exemple de sortie de `check-once` (tableau aligné et coloré en terminal ; une colonne par
-capacité, nommée d'après le registre) :
+`check-once` affiche un **tableau** (une colonne par capacité, cellule = `statut latence`) —
+bordé et coloré en terminal, aligné sans bordures en pipe :
 
 ```
-Cycle terminé — 4 cible(s) · 2 up · 1 erreur(s) · 0.4s · run_id=12
-
-  ORGANISATION  MODÈLE          LIVENESS  tool_calling  reasoning       LAT.
-  backup        reasoner-7b     ERROR     ERROR         ERROR              —
-  prod          does-not-exist  DOWN      —             —                6ms
-  prod          reasoner-7b     UP        AVAILABLE     AVAILABLE       14ms
-  prod          text-only       UP        AVAILABLE     UNAVAILABLE      9ms  ⚠ dérive: reasoning
-
-  Légende : UP/AVAILABLE = ok · DOWN/UNAVAILABLE = indisponible · ERROR = erreur · — = non testé
+  aristote  gpt-oss-120b   UP 244ms   AVAILABLE 479ms  AVAILABLE 1313ms
+  aristote  llama-3.1-8b   UP 263ms   ERROR 240ms      UNAVAILABLE 1836ms   ⚠ dérive: reasoning
+  aristote  unknown-model  DOWN 56ms  —                —
 ```
 
-> Les **logs** (structlog JSON) vont sur **stderr** ; **stdout** ne contient que le tableau
-> (utile pour `… | grep`/`| tee`). Les commandes CLI sont silencieuses par défaut ; ajoutez
-> `--verbose` pour voir les logs INFO (requêtes HTTP, etc.).
+Suit une section **« Détails par sonde »** : pour chaque sonde exécutée, la requête envoyée
+(`↳ prompt / outil / extra_body`, y compris pour les sondes OK) et, pour les non-OK, le code
+HTTP + le message d'erreur. Les logs vont sur **stderr** (stdout = tableau seul, pipe-friendly) ;
+`--verbose` ajoute les logs INFO.
 
 ---
 
@@ -168,7 +163,7 @@ Servie sur `api_port` (def. 8080), en lecture seule :
 | `GET /health` | santé du monitor (DB, dernier run, nb de cibles) |
 | `GET /api/organizations` | organisations configurées |
 | `GET /api/models` | cibles + capacités déclarées + sondes sélectionnées |
-| `GET /api/status?org=&model=` | **état courant** (dernier cycle terminé) |
+| `GET /api/status?org=&model=` | **état courant** (par modèle : up/down `liveness_status` + `liveness_probe` (nom de la sonde : `chat_completion`/`list_models`) + latence + `http_status`/`error` ; par capacité `{status, latency_ms, http_status, error, request}` — `request` = log d'entrée : prompt/outil/extra_body) |
 | `GET /api/models/{org}/{model}/history?since=&until=&limit=` | historique paginé |
 | `GET /api/runs` · `GET /api/runs/{id}` | cycles de checks et leur détail |
 | `GET /metrics` | exposition Prometheus (répond 200 directement) |
@@ -184,13 +179,13 @@ Doc OpenAPI interactive : `http://localhost:8080/docs`.
 
 ## Métriques Prometheus
 
-Labels `org` / `model` uniquement (pas de `base_url`) :
+Labels `org` / `model` (+ `capability`/`probe` descriptifs) ; jamais de `base_url` ni de secret :
 
 | Métrique | Type | Description |
 |---|---|---|
-| `aigw_model_up` | gauge | 1 si up, 0 sinon |
+| `aigw_model_up` | gauge | 1 si up, 0 sinon (label `probe` = sonde up/down : `chat_completion`/`list_models`) |
 | `aigw_model_capability_available` | gauge | 1/0 par capacité (label `capability`) ; absente si non testée |
-| `aigw_model_check_latency_seconds` | gauge | latence de la sonde liveness |
+| `aigw_model_check_latency_seconds` | gauge | latence de la sonde up/down (label `probe`) |
 | `aigw_model_check_errors_total` | counter | nombre de checks en erreur |
 | `aigw_model_capability_mismatch` | gauge | dérive déclaré vs observé (label `capability`) |
 | `aigw_check_run_timestamp_seconds` | gauge | horodatage du dernier cycle |
@@ -271,32 +266,14 @@ defaults.capabilities  <  org.capabilities  <  model_defaults[<nom>]  <  org.mod
   le défaut d'org** et n'est surchargé que par une déclaration explicite `(org, modèle)`.
 - `liveness` tourne **toujours** ; les capacités ne sont sondées que si déclarées
   (`true` ou `{ enabled: true }`) **et** présentes dans le registre.
+- **Méthode `liveness`** (même précédence) : `chat` (chat completion réel, défaut) ou
+  `models` (`GET /v1/models`, plus léger). Réglable à chaque niveau (`defaults`, `org`,
+  `model_defaults`, `(org, modèle)`).
 - Forme courte (`tool_calling: true`) ou objet pour passer un `extra_body` spécifique au
   provider (ex. activer le *thinking*).
 
-### Ajouter une capacité (développeurs)
-
-L'architecture est **pluggable** : ajouter une capacité de modèle se fait en **deux endroits**,
-sans toucher au stockage, aux métriques, à l'API ni à la CLI (qui itèrent le registre).
-
-1. Écrire la sonde dans [`src/aigw_monitor/checks/probes.py`](src/aigw_monitor/checks/probes.py) :
-   ```python
-   async def check_vision(client: OpenAICompatClient, target: ResolvedTarget) -> ProbeResult:
-       ...  # renvoie un ProbeResult (AVAILABLE / UNAVAILABLE / ERROR)
-   ```
-2. L'enregistrer dans [`src/aigw_monitor/checks/capabilities.py`](src/aigw_monitor/checks/capabilities.py) :
-   ```python
-   CAPABILITY_PROBES = {
-       "tool_calling": check_tool_calling,
-       "reasoning": check_reasoning,
-       "vision": check_vision,   # ← nouvelle capacité
-   }
-   ```
-
-Elle est alors automatiquement : déclarable en config, sondée (si activée), persistée dans la
-colonne JSONB `capabilities` (**aucune migration**), exposée en
-`aigw_model_capability_available{capability="vision"}` et dans `/api/status`, et affichée comme
-nouvelle colonne de la CLI.
+> **Ajouter une capacité** (dev) : écrire une sonde + l'enregistrer dans le registre
+> `CAPABILITY_PROBES` ; tout le reste suit automatiquement. Détails dans [`CLAUDE.md`](CLAUDE.md).
 
 ---
 

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Méthode de sonde liveness : appel réel de complétion (défaut) ou GET /v1/models (léger).
+LivenessMethod = Literal["chat", "models"]
 
 
 class CapabilitySpec(BaseModel):
@@ -53,6 +56,7 @@ class ModelEntry(BaseModel):
 
     name: str
     max_tokens: int | None = None
+    liveness: LivenessMethod | None = None
     capabilities: dict[str, CapabilitySpec] = Field(default_factory=dict)
 
 
@@ -63,6 +67,7 @@ class OrgEntry(BaseModel):
     base_url: str
     api_key_env: str | None = None
     max_tokens: int | None = None
+    liveness: LivenessMethod | None = None
     capabilities: dict[str, CapabilitySpec] = Field(default_factory=dict)
     models: list[ModelEntry]
 
@@ -71,6 +76,7 @@ class DefaultsEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_tokens: int = 16
+    liveness: LivenessMethod = "chat"
     capabilities: dict[str, CapabilitySpec] = Field(default_factory=dict)
 
 
@@ -80,6 +86,7 @@ class ModelDefaultsEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_tokens: int | None = None
+    liveness: LivenessMethod | None = None
     capabilities: dict[str, CapabilitySpec] = Field(default_factory=dict)
 
 

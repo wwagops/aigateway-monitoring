@@ -19,6 +19,7 @@ class OpenAICompatClient:
     def __init__(self, base_url: str, api_key: str | None, timeout: float) -> None:
         self._base_url = base_url.rstrip("/")
         self._chat_url = f"{self._base_url}/chat/completions"
+        self._models_url = f"{self._base_url}/models"
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -32,6 +33,13 @@ class OpenAICompatClient:
         """Envoie la requête, renvoie (réponse, latence_ms). Peut lever httpx.HTTPError."""
         start = time.perf_counter()
         response = await self._client.post(self._chat_url, json=payload)
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        return response, latency_ms
+
+    async def list_models(self) -> tuple[httpx.Response, float]:
+        """GET {base_url}/models, renvoie (réponse, latence_ms). Peut lever httpx.HTTPError."""
+        start = time.perf_counter()
+        response = await self._client.get(self._models_url)
         latency_ms = (time.perf_counter() - start) * 1000.0
         return response, latency_ms
 
