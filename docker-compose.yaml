@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aigw
+      POSTGRES_PASSWORD: aigw
+      POSTGRES_DB: aigw
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aigw"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Applique les migrations puis se termine.
+  migrate:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AIGW_DATABASE_URL: postgresql+asyncpg://aigw:aigw@postgres:5432/aigw
+    entrypoint: ["alembic", "upgrade", "head"]
+
+  monitor:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      AIGW_DATABASE_URL: postgresql+asyncpg://aigw:aigw@postgres:5432/aigw
+      AIGW_CONFIG_PATH: /app/config.yaml
+      # Clés API (api_key_env du YAML) : doivent être de VRAIES variables d'environnement du
+      # conteneur. Le .env monté ci-dessous ne sert qu'aux AIGW_* (pydantic ne le ré-exporte pas).
+      # Décommente et alimente depuis l'hôte (Compose interpole ${VAR}) :
+      # ACME_API_KEY: ${ACME_API_KEY:?définir ACME_API_KEY}
+      # RESEARCH_API_KEY: ${RESEARCH_API_KEY:?définir RESEARCH_API_KEY}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.env:/app/.env:ro # AIGW_* uniquement (les clés API passent par `environment:`)
+
+volumes:
+  pgdata:

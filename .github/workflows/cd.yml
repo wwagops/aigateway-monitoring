@@ -1,0 +1,102 @@
+name: CD
+
+# La CI (lint/tests/migrations) tourne dans un workflow séparé (ci.yml).
+# La CD se déclenche UNIQUEMENT sur un tag de version (vX.Y.Z) — aucun build sur push de branche.
+# Recommandé : ne taguer que des commits verts (CI passée).
+on:
+  push:
+    tags: ["v*"] # → images sémantiques : 1.2.3, 1.2, latest
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  docker:
+    name: build & push image (ghcr)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Crée une GitHub Release (sur tag vX.Y.Z) avec notes auto-générées + référence d'image.
+  release:
+    name: github release
+    needs: docker
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Create release (gh CLI)
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"   # tag d'image réel (semver sans le préfixe « v »)
+          # Changelog auto-généré par GitHub (respecte .github/release.yml).
+          gh api -X POST "repos/$GH_REPO/releases/generate-notes" \
+            -f tag_name="$TAG" --jq '.body' > changelog.md
+          # En-tête (image) + changelog auto.
+          {
+            printf '## 🐳 Image\n\n```bash\ndocker pull ghcr.io/%s:%s\n```\n\n' "$GH_REPO" "$VERSION"
+            cat changelog.md
+          } > body.md
+          flags=(--title "$TAG" --notes-file body.md)
+          # Pré-release auto si le tag contient un suffixe (ex. v1.2.0-rc1).
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" "${flags[@]}"
+
+  # Déploiement — TEMPLATE opt-in. Inerte tant que la variable de dépôt
+  # DEPLOY_ENABLED != 'true'. Adaptez le script à votre cible + fournissez les secrets.
+  deploy:
+    name: deploy (opt-in)
+    needs: docker
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && vars.DEPLOY_ENABLED == 'true'
+    environment: production
+    steps:
+      - name: Rollout (à adapter)
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME}"
+          echo "Déploiement de l'image : $IMAGE"
+          # Exemple SSH + docker compose :
+          #   ssh "$DEPLOY_HOST" "cd /srv/aigw && docker compose pull && docker compose up -d"
+          # Exemple Kubernetes :
+          #   kubectl set image deployment/aigw-monitor monitor="$IMAGE" -n aigw

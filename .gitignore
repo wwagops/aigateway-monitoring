@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Secrets / config locale
+.env
+config.yaml
+
+# Base SQLite locale (défaut)
+*.db
+*.sqlite
+*.sqlite3
+
+# Réglages locaux Claude Code (personnels)
+.claude/settings.local.json
+
+# OS
+.DS_Store
