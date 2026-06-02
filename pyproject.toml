@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aigw-monitor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Monitoring de serveurs d'inférence (vLLM, LiteLLM, …) compatibles OpenAI : up, tool calling, reasoning."
 readme = "README.md"
 requires-python = ">=3.11"
