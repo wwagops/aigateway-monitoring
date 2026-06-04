@@ -19,6 +19,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# Table de suivi des révisions Alembic, préfixée pour cette app. Permet de cohabiter avec une
+# autre application Alembic dans le même schéma PG (qui garderait, elle, "alembic_version") sans
+# collision. On ne renomme/supprime jamais une table existante : on travaille à côté.
+VERSION_TABLE = "aigw_alembic_version"
+
 # URL fournie par les Settings (fichier YAML monitor: ou env AIGW_DATABASE_URL).
 config.set_main_option("sqlalchemy.url", Settings().database_url)
 
@@ -32,13 +37,19 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        version_table=VERSION_TABLE,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        version_table=VERSION_TABLE,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

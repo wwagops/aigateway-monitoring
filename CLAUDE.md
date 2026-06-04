@@ -136,6 +136,12 @@ au même titre que les capacités.
 - **PostgreSQL (prod)** : fournir `AIGW_DATABASE_URL=postgresql+asyncpg://…` puis
   `alembic upgrade head`. `create_all_if_sqlite` est un **no-op** hors SQLite (le schéma reste
   géré par Alembic).
+- **Table de version Alembic = `aigw_alembic_version`** (constante `VERSION_TABLE` dans
+  `migrations/env.py`, passée en `version_table=` aux **deux** `context.configure`), pas le défaut
+  `alembic_version`. But : cohabiter avec une autre app Alembic dans le **même schéma** PG sans
+  collision. On ne renomme/supprime **jamais** une `alembic_version` existante : on travaille à
+  côté. ⚠️ Pour un PG déjà déployé avec l'ancien nom : `ALTER TABLE alembic_version RENAME TO
+  aigw_alembic_version` (sinon Alembic croit la base vierge et re-crée les tables).
 - Alembic : `migrations/env.py` **async**, URL issue de `Settings().database_url`. Migrations
   **écrites à la main** (PG : `postgresql.ENUM` + `JSONB`) — elles ne tournent **pas** sur SQLite.
   `0001_initial` (tables + enums), `0002_capabilities_jsonb` (colonne JSONB `capabilities`, drop
